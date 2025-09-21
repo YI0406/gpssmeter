@@ -145,14 +145,16 @@ class _MapModePageState extends State<MapModePage> {
   }
 
   // 啟用暫時 heading 追蹤（不改 _mode），並強制 AppleMap 重新套 trackingMode
-  void _engageTransientHeadingTracking({bool recenter = true}) {
+  void _engageTransientHeadingTracking({bool recenter = true, double? zoom}) {
+    final savedZoom = zoom ?? _zoomNow;
     setState(() {
       _headingFollowTransient = true; // 啟用暫時 heading 追蹤（不改 _mode）
       _manualHeadingDeg = null; // 交給原生旋轉
       _followCamera = true; // 必須打開跟隨
+      _currentZoom = savedZoom;
     });
     if (recenter) {
-      _jumpToCurrent(force: true);
+      _jumpToCurrent(zoom: savedZoom, force: true);
     }
     // 透過脈衝切換，強制 plugin 重新套用 trackingMode
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -164,7 +166,14 @@ class _MapModePageState extends State<MapModePage> {
         if (!mounted) return;
         setState(() {
           _followCamera = true;
+          _currentZoom = savedZoom;
         });
+        if (recenter) {
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (!mounted) return;
+            _jumpToCurrent(zoom: savedZoom, force: true);
+          });
+        }
       });
     });
   }
@@ -645,15 +654,17 @@ class _MapModePageState extends State<MapModePage> {
   // 重新武裝原生 heading 追蹤：
   // 1) 保證為 headingUp
   // 2) 先確保跟隨開啟，再短暫關閉→下一幀再開啟，強迫 AppleMap 重新套用 trackingMode
-  void _rearmNativeHeadingTracking({bool recenter = true}) {
+  void _rearmNativeHeadingTracking({bool recenter = true, double? zoom}) {
+    final savedZoom = zoom ?? _zoomNow;
     setState(() {
       _mode = MapCameraMode.headingUp;
       _manualHeadingDeg = null;
       MapModePage._lastMode = _mode;
       _followCamera = true;
+      _currentZoom = savedZoom;
     });
     if (recenter) {
-      _jumpToCurrent(force: true);
+      _jumpToCurrent(zoom: savedZoom, force: true);
     }
     // 透過一次“脈衝”切換強制 plugin 重新套 trackingMode
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -666,7 +677,14 @@ class _MapModePageState extends State<MapModePage> {
         if (!mounted) return;
         setState(() {
           _followCamera = true;
+          _currentZoom = savedZoom;
         });
+        if (recenter) {
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (!mounted) return;
+            _jumpToCurrent(zoom: savedZoom, force: true);
+          });
+        }
       });
     });
   }
@@ -675,6 +693,7 @@ class _MapModePageState extends State<MapModePage> {
   // 北上模式：只回定位且維持北上（不出現扇形、不跟手機旋轉）
   // 目的地方向上：回定位＋立刻啟用原生扇形並隨手機旋轉
   void _onLocateFabPressed() {
+    final savedZoom = _zoomNow;
     // 不再使用雙擊流程
     _locatePrimed = false;
     _locatePrimedAt = null;
@@ -686,13 +705,19 @@ class _MapModePageState extends State<MapModePage> {
         _followCamera = true; // 開啟跟隨，但 trackingMode 只會是 follow（不旋轉）
         _manualHeadingDeg = null; // 清手動角度，避免殘留
         _cameraHeadingDeg = 0.0; // 北方在上
+        _currentZoom = savedZoom;
       });
-      _jumpToCurrent(force: true);
+      _jumpToCurrent(zoom: savedZoom, force: true);
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        _jumpToCurrent(zoom: savedZoom, force: true);
+      });
+
       return;
     }
 
     // ★ 目的地方向上：回定位＋原生 followWithHeading（顯示扇形、跟手機旋轉）
-    _engageTransientHeadingTracking(recenter: true);
+    _engageTransientHeadingTracking(recenter: true, zoom: savedZoom);
   }
 
   Future<void> _moveCamera(CameraUpdate cu) async {
@@ -832,10 +857,15 @@ class _MapModePageState extends State<MapModePage> {
     // 強制立即更新相機狀態（不同模式下立即切換定位/heading）
     if (m == MapCameraMode.northUp) {
       // 立刻回正北並回到目前位置（忽略原生追蹤的早退）
-      _jumpToCurrent(force: true);
+      _currentZoom = _zoomNow;
+      _jumpToCurrent(zoom: _currentZoom, force: true);
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        _jumpToCurrent(zoom: _currentZoom, force: true);
+      });
     } else {
       // headingUp：立即啟用原生扇形並隨手機旋轉，同時回到目前位置
-      _rearmNativeHeadingTracking(recenter: true);
+      _rearmNativeHeadingTracking(recenter: true, zoom: _zoomNow);
     }
   }
 
