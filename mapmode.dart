@@ -131,7 +131,8 @@ class _MapModePageState extends State<MapModePage> {
   double get _zoomNow => _lastCam?.zoom ?? _currentZoom;
   // 最近一次已知的相機狀態（用於取代 getCameraPosition）
   CameraPosition? _lastCam;
-  // 最近一次速度（m/s），用於判定是否允許旋轉
+  // 追蹤模式下等待恢復的縮放任務序號（用於取消排程）
+  int _zoomRestoreSeq = 0;
   double _lastMps = 0.0;
   bool get _canRotate => _lastMps > kRotateMinSpeedMps;
   // 使用 Apple Maps 原生追蹤模式：
@@ -172,10 +173,42 @@ class _MapModePageState extends State<MapModePage> {
           WidgetsBinding.instance.addPostFrameCallback((_) {
             if (!mounted) return;
             _jumpToCurrent(zoom: savedZoom, force: true);
+            _scheduleTrackingZoomRestore(savedZoom);
           });
+        } else {
+          _scheduleTrackingZoomRestore(savedZoom);
         }
       });
     });
+  }
+
+  void _scheduleTrackingZoomRestore(double zoom) {
+    final seq = ++_zoomRestoreSeq;
+    void apply() {
+      if (!mounted) return;
+      if (_mapController == null) return;
+      if (seq != _zoomRestoreSeq) return;
+      if (!_followCamera) return;
+      if (!(_headingFollowTransient || _mode == MapCameraMode.headingUp)) {
+        return;
+      }
+      final last = _lastCam;
+      if (last == null) return;
+      if ((last.zoom - zoom).abs() < 0.01) return;
+      final cp = CameraPosition(
+        target: last.target,
+        zoom: zoom,
+        heading: last.heading,
+        pitch: last.pitch,
+      );
+      _lastCam = cp;
+      _currentZoom = zoom;
+      _moveCamera(CameraUpdate.newCameraPosition(cp));
+    }
+
+    for (final delay in const [40, 160, 320]) {
+      Future.delayed(Duration(milliseconds: delay), apply);
+    }
   }
 
   // 跟隨防誤觸：僅當使用者確實平移/縮放/旋轉到一定門檻才關閉跟隨
@@ -683,7 +716,10 @@ class _MapModePageState extends State<MapModePage> {
           WidgetsBinding.instance.addPostFrameCallback((_) {
             if (!mounted) return;
             _jumpToCurrent(zoom: savedZoom, force: true);
+            _scheduleTrackingZoomRestore(savedZoom);
           });
+        } else {
+          _scheduleTrackingZoomRestore(savedZoom);
         }
       });
     });
@@ -1260,6 +1296,7 @@ class _MapModePageState extends State<MapModePage> {
                 if ((movedEnough || zoomedEnough) && _followCamera) {
                   setState(() {
                     _followCamera = false; // 讓使用者自由移動/縮放
+                    _zoomRestoreSeq++; // 使用者介入時取消待處理的縮放復原
                   });
                 }
                 if (rotatedEnough) {
