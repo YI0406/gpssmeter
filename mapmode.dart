@@ -189,9 +189,7 @@ class _MapModePageState extends State<MapModePage> {
       if (_mapController == null) return;
       if (seq != _zoomRestoreSeq) return;
       if (!_followCamera) return;
-      if (!(_headingFollowTransient || _mode == MapCameraMode.headingUp)) {
-        return;
-      }
+      if (_trackingMode == TrackingMode.none) return;
       final last = _lastCam;
       if (last == null) return;
       if ((last.zoom - zoom).abs() < 0.01) return;
