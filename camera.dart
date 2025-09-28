@@ -1,17 +1,14 @@
 // lib/camera.dart
 // Recording mode with camera background and overlay HUD.
 // NOTE:
-// 1) This uses the `camera`, `permission_handler`, and `image_gallery_saver` packages.
-//    Make sure your pubspec.yaml includes:
+// 1) This uses the `camera` and `share_plus` packages.
+//    Make sure your pubspec.yaml includes：
 //      camera: ^0.11.0
-//      permission_handler: ^11.3.1
-//      image_gallery_saver: ^2.0.3
-//    (Versions are examples; align with your project.)
+//      share_plus: ^10.0.2
+//    （版本請依你的專案調整）
 // 2) The overlay you want (時速、里程、溫度、狀態等) 可由 overlayBuilder 提供，
 //    這樣可直接重用你主頁現有的小元件。
-// 3) 目前「保存到相簿」未內建，因為你先前回報 gallery_saver 套件相依衝突。
-//    若要存到相簿，建議改用 `photo_manager` 或 `image_gallery_saver`，
-//    之後我可以幫你補上對接（避免 http 衝突）。
+// 3) 錄影完成後會直接呼叫分享面板（Share Sheet）供使用者分享影片。
 
 import 'dart:async';
 import 'dart:io';
@@ -19,8 +16,7 @@ import 'dart:io';
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:image_gallery_saver/image_gallery_saver.dart';
-import 'package:permission_handler/permission_handler.dart';
+import 'package:share_plus/share_plus.dart';
 import 'package:gps_speedometer_min/setting.dart';
 
 /// 頁面：錄影模式（相機做背景，資訊 HUD 懸浮其上）
@@ -56,16 +52,11 @@ class _CameraRecordPageState extends State<CameraRecordPage>
   bool _initializing = true;
   bool _recording = false;
   bool _opBusy = false; // guard for start/stop in progress
-  bool _photoPermissionDialogVisible = false;
-  bool _hasPromptedPhotoPermission = false;
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      unawaited(_ensurePhotoPermission());
-    });
     // Listen native callback: preview closed -> re-init camera
     _replaykit.setMethodCallHandler((call) async {
       if (call.method == 'previewClosed') {
@@ -246,94 +237,20 @@ class _CameraRecordPageState extends State<CameraRecordPage>
       return;
     }
 
-    final canSave = await _ensurePhotoPermission();
-    if (!canSave) {
-      _showSnack(L10n.t('photo_permission_needed'));
-      return;
-    }
-
-    final saved = await _saveToPhotoLibrary(file);
-    if (saved) {
-      unawaited(file.delete().catchError((_) {}));
-    }
+    await _shareRecording(file);
+    unawaited(file.delete().catchError((_) {}));
 
     await _recreateController();
   }
 
-  Future<bool> _saveToPhotoLibrary(File file) async {
+  Future<void> _shareRecording(File file) async {
     try {
-      final result = await ImageGallerySaver.saveFile(
-        file.path,
-        isReturnPathOfIOS: true,
-      );
-      final success = (result['isSuccess'] as bool?) ?? false;
-      if (success) {
-        _showSnack(L10n.t('recording_saved_gallery'));
-        return true;
-      } else {
-        _showSnack(L10n.t('recording_save_failed'));
-      }
+      _showSnack(L10n.t('share_recording_prompt'));
+      await Share.shareXFiles([XFile(file.path)]);
     } catch (e) {
-      debugPrint('Photo save failed: $e');
-      _showSnack('${L10n.t('recording_save_failed')}：$e');
+      debugPrint('Share failed: $e');
+      _showSnack('${L10n.t('share_failed')}：$e');
     }
-    return false;
-  }
-
-  Future<bool> _ensurePhotoPermission({bool requestIfDenied = true}) async {
-    if (!Platform.isIOS) return true;
-
-    final Permission permission = Permission.photosAddOnly;
-    PermissionStatus status = await permission.status;
-    if (status.isGranted || status.isLimited) {
-      return true;
-    }
-
-    if (!requestIfDenied) {
-      _maybePromptPhotoPermission(permanent: status.isPermanentlyDenied || status.isRestricted);
-      return false;
-    }
-
-    status = await permission.request();
-    if (status.isGranted || status.isLimited) {
-      return true;
-    }
-
-    _maybePromptPhotoPermission(permanent: status.isPermanentlyDenied || status.isRestricted);
-    return false;
-  }
-
-  void _maybePromptPhotoPermission({required bool permanent}) {
-    if (!mounted || _photoPermissionDialogVisible || _hasPromptedPhotoPermission) return;
-    _photoPermissionDialogVisible = true;
-    _hasPromptedPhotoPermission = true;
-    showDialog<void>(
-      context: context,
-      barrierDismissible: !permanent,
-      builder: (ctx) {
-        return AlertDialog(
-          title: Text(L10n.t('photo_permission_needed_title')),
-          content: Text(L10n.t('photo_permission_needed')),
-          actions: [
-            TextButton(
-              onPressed: () {
-                Navigator.of(ctx).pop();
-              },
-              child: Text(L10n.t('photo_permission_cancel')),
-            ),
-            TextButton(
-              onPressed: () async {
-                Navigator.of(ctx).pop();
-                await openAppSettings();
-              },
-              child: Text(L10n.t('photo_permission_open_settings')),
-            ),
-          ],
-        );
-      },
-    ).whenComplete(() {
-      _photoPermissionDialogVisible = false;
-    });
   }
 
   @override
