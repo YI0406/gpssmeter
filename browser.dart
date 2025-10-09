@@ -41,6 +41,7 @@ class _TabData {
   InAppWebViewController? controller;
   Uint8List? cachedThumbnail;
   String? cachedThumbnailBase64;
+  String? appliedUserAgent;
   final Set<String> allowedAppLinkHosts = <String>{};
   final List<String> history = <String>[];
   int historyIndex = -1;
@@ -1856,17 +1857,80 @@ const bindVideo = (video) => {
   }
 
   Future<void> _applyUserAgentToControllers() async {
-    if (_userAgent == null) return;
-    for (final t in _tabs) {
-      final c = t.controller;
-      if (c != null) {
+    final baseUa = _userAgent;
+    if (baseUa == null) return;
+    for (final tab in _tabs) {
+      final controller = tab.controller;
+      final targetUa = _effectiveUserAgentForUrl(tab.currentUrl) ?? baseUa;
+      tab.appliedUserAgent = targetUa;
+      if (controller != null) {
         try {
-          await c.setSettings(
-            settings: InAppWebViewSettings(userAgent: _userAgent),
+          await controller.setSettings(
+            settings: InAppWebViewSettings(userAgent: targetUa),
           );
-          await c.reload();
+          await controller.reload();
         } catch (_) {}
       }
+    }
+  }
+
+  String? _effectiveUserAgentForUrl(String? url) {
+    final baseUa = _userAgent;
+    if (baseUa == null) return null;
+    if (_shouldForceIpadUserAgent(url)) {
+      return _uaForMode('ipad');
+    }
+    return baseUa;
+  }
+
+  bool _shouldForceIpadUserAgent(String? url) {
+    if (!Platform.isIOS) {
+      return false;
+    }
+    final mediaQuery = MediaQuery.maybeOf(context);
+    final isTablet =
+        mediaQuery != null && mediaQuery.size.shortestSide >= 600.0;
+    if (isTablet) {
+      return false;
+    }
+    if (url == null || url.isEmpty) {
+      return false;
+    }
+    try {
+      final uri = Uri.parse(url);
+      final host = uri.host.toLowerCase();
+      if (host.isEmpty) {
+        return false;
+      }
+      return host.contains('youtube.com') || host.contains('youtu.be');
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Future<void> _ensureEffectiveUserAgentForNavigation(
+    _TabData tab,
+    InAppWebViewController controller,
+    String? url,
+  ) async {
+    final targetUa = _effectiveUserAgentForUrl(url);
+    if (targetUa == null) {
+      return;
+    }
+    if (tab.appliedUserAgent == targetUa) {
+      return;
+    }
+    try {
+      await controller.setSettings(
+        settings: InAppWebViewSettings(userAgent: targetUa),
+      );
+      tab.appliedUserAgent = targetUa;
+    } catch (_) {}
+  }
+
+  void _prepareManualNavigation(String url) {
+    if (_blockExternalApp) {
+      _rememberTemporaryHostBypassFromUrl(url);
     }
   }
 
@@ -3910,6 +3974,7 @@ const bindVideo = (video) => {
     Set<String>? allowedAppLinkHosts,
   }) {
     final tab = _TabData(initialUrl: initialUrl);
+    tab.appliedUserAgent = _effectiveUserAgentForUrl(initialUrl) ?? _userAgent;
     if (allowedAppLinkHosts != null && allowedAppLinkHosts.isNotEmpty) {
       for (final host in allowedAppLinkHosts) {
         final normalized = _normalizeHostComponent(host);
@@ -6024,6 +6089,9 @@ const bindVideo = (video) => {
                         onWebViewCreated: (c) {
                           final tab = _tabs[tabIndex];
                           tab.controller = c;
+                          tab.appliedUserAgent =
+                              _effectiveUserAgentForUrl(tab.currentUrl) ??
+                              _userAgent;
                           // Register the JavaScript handler that receives sniffed media info.
                           c.addJavaScriptHandler(
                             handlerName: 'sniffer',
@@ -6123,6 +6191,7 @@ const bindVideo = (video) => {
                         },
                         onLoadStart: (c, u) async {
                           _cachedYoutubeInfo = null;
+                          final tab = _tabs[tabIndex];
                           // 雙保險：硬攔非 Web scheme（極少數情況仍可能觸發）
                           final blocked = _shouldPreventExternalNavigation(
                             u,
@@ -6135,11 +6204,16 @@ const bindVideo = (video) => {
                             );
                             return;
                           }
+                          await _ensureEffectiveUserAgentForNavigation(
+                            tab,
+                            c,
+                            u?.toString(),
+                          );
                           _iosLinkMenuBridgeReady = false;
                           await _injectIosLinkContextMenuBridge(c);
                           await _injectVideoDetector(c);
                           repo.clearPlayingVideos();
-                          final tab = _tabs[tabIndex];
+
                           tab.isLoading.value = true;
                           tab.progress.value = 0.0;
                           if (u != null) {
@@ -7242,6 +7316,7 @@ const bindVideo = (video) => {
               onOpen: (String url) {
                 if (_tabs.isEmpty) return;
                 final tab = _tabs[_currentTabIndex];
+                _prepareManualNavigation(url);
                 tab.controller?.loadUrl(
                   urlRequest: URLRequest(url: WebUri(url)),
                 );
@@ -7261,6 +7336,7 @@ const bindVideo = (video) => {
               onOpen: (String url) {
                 if (_tabs.isNotEmpty) {
                   final tab = _tabs[_currentTabIndex];
+                  _prepareManualNavigation(url);
                   tab.controller?.loadUrl(
                     urlRequest: URLRequest(url: WebUri(url)),
                   );

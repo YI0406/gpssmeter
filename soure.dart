@@ -1008,10 +1008,16 @@ class AppRepo extends ChangeNotifier {
     }
     final expected = update.expectedFileSize;
     if (expected > 0) {
-      local.total = expected;
+      final currentTotal = local.total ?? 0;
+      if (currentTotal <= 0 || expected >= currentTotal) {
+        local.total = expected;
+      }
       if (update.progress >= 0) {
         final received = (update.progress * expected).round();
-        local.received = received.clamp(0, expected);
+        final clamped = received.clamp(0, expected);
+        if (clamped >= local.received) {
+          local.received = clamped;
+        }
       }
     } else {
       if (local.total != null && local.total! <= 0) {
@@ -1099,12 +1105,16 @@ class AppRepo extends ChangeNotifier {
     }
     final expected = record.expectedFileSize;
     if (expected > 0) {
-      local.total = expected;
+      final currentTotal = local.total ?? 0;
+      if (currentTotal <= 0 || expected >= currentTotal) {
+        local.total = expected;
+      }
       if (record.progress >= 0) {
-        local.received = (record.progress * expected).round().clamp(
-          0,
-          expected,
-        );
+        final received = (record.progress * expected).round();
+        final clamped = received.clamp(0, expected);
+        if (clamped >= local.received) {
+          local.received = clamped;
+        }
       }
     } else if (expected <= 0) {
       if (local.total != null && local.total! <= 0) {
@@ -4667,6 +4677,15 @@ class AppRepo extends ChangeNotifier {
         await _bgDownloader.cancelTaskWithId(bgId);
       } catch (_) {}
       _detachBackgroundTask(bgId);
+      try {
+        final db = _bgDownloader.database;
+        await (db as dynamic).deleteRecordsWithIds([bgId]);
+      } catch (_) {
+        try {
+          final db = _bgDownloader.database;
+          await (db as dynamic).deleteRecordWithId(bgId);
+        } catch (_) {}
+      }
     }
 
     if (t.kind == 'hls') {
